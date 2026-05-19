@@ -3,6 +3,15 @@
 # =========================================================
 # Fault-Tolerant Recon Automation Framework
 # =========================================================
+# Author: Chirag Jain
+# Purpose:
+#   Full recon + crawling + vuln scanning automation
+#
+# Usage:
+#   chmod +x recon.sh
+#   ./recon.sh example.com
+#
+# =========================================================
 
 set -uo pipefail
 
@@ -16,6 +25,10 @@ if [[ -z "$DOMAIN" ]]; then
     echo "Usage: $0 <domain>"
     exit 1
 fi
+
+DOMAIN="${DOMAIN#http://}"
+DOMAIN="${DOMAIN#https://}"
+DOMAIN="${DOMAIN%%/*}"
 
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 
@@ -152,6 +165,35 @@ safe_file_exists() {
     [[ -f "$FILE" && -s "$FILE" ]]
 }
 
+count_lines() {
+
+    local FILE="$1"
+
+    if safe_file_exists "$FILE"; then
+        wc -l < "$FILE"
+    else
+        echo 0
+    fi
+}
+
+extract_httpx_urls() {
+
+    local INPUT="$1"
+    local OUTPUT="$2"
+
+    if tool_exists jq; then
+        jq -r 'select(.url != null) | .url' "$INPUT" 2>/dev/null \
+        | sort -u \
+        > "$OUTPUT"
+    else
+        warn "jq missing - using fallback parser for httpx JSON"
+
+        sed -n 's/.*"url":"\([^"]*\)".*/\1/p' "$INPUT" 2>/dev/null \
+        | sort -u \
+        > "$OUTPUT"
+    fi
+}
+
 # =========================
 # SUBDOMAIN ENUMERATION
 # =========================
@@ -177,8 +219,11 @@ safe_run findomain \
 findomain -t "$DOMAIN" -q \
 > "$ENUM_DIR/findomain.txt"
 
-find "$ENUM_DIR" -type f -name "*.txt" \
--exec cat {} + 2>/dev/null \
+{
+    printf '%s\n' "$DOMAIN"
+    find "$ENUM_DIR" -type f -name "*.txt" -exec cat {} + 2>/dev/null
+} \
+| sed '/^[[:space:]]*$/d' \
 | sort -u \
 > "$ENUM_DIR/all_subdomains.txt"
 
@@ -230,9 +275,19 @@ if safe_file_exists "$DNS_DIR/resolved.txt"; then
     naabu \
     -l "$DNS_DIR/resolved.txt" \
     -top-ports 100 \
+    -scan-type c \
     -rate "$RATE" \
     -silent \
     -o "$PORTS_DIR/ports.txt"
+
+    TOTAL_PORTS=$(count_lines "$PORTS_DIR/ports.txt")
+
+    if [[ "$TOTAL_PORTS" -eq 0 ]]; then
+        warn "Port scan produced no results. This can mean no ports were found in the top 100, naabu was rate-limited, or packets were blocked."
+        warn "Input hosts: $(count_lines "$DNS_DIR/resolved.txt")"
+    else
+        success "Found $TOTAL_PORTS open ports"
+    fi
 
 else
 
@@ -262,10 +317,17 @@ if safe_file_exists "$DNS_DIR/resolved.txt"; then
 
     if safe_file_exists "$HTTP_DIR/httpx.json"; then
 
-        cat "$HTTP_DIR/httpx.json" \
-        | jq -r '.url' 2>/dev/null \
-        | sort -u \
-        > "$HTTP_DIR/alive.txt"
+        extract_httpx_urls "$HTTP_DIR/httpx.json" "$HTTP_DIR/alive.txt"
+
+        if ! safe_file_exists "$HTTP_DIR/alive.txt"; then
+            warn "HTTP probing produced JSON, but no URLs were extracted into alive.txt"
+            warn "First httpx output line:"
+            head -n 1 "$HTTP_DIR/httpx.json" || true
+        fi
+
+    else
+
+        warn "HTTP probing produced no httpx.json output"
 
     fi
 
