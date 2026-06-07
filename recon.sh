@@ -287,6 +287,35 @@ if safe_file_exists "$DNS_DIR/resolved.txt"; then
         warn "Input hosts: $(count_lines "$DNS_DIR/resolved.txt")"
     else
         success "Found $TOTAL_PORTS open ports"
+
+        sed 's/:[0-9]\+$//' "$PORTS_DIR/ports.txt" \
+        | sort -u \
+        > "$PORTS_DIR/nmap_hosts.txt"
+
+        awk -F: '{print $NF}' "$PORTS_DIR/ports.txt" \
+        | sort -n -u \
+        | paste -sd, - \
+        > "$PORTS_DIR/nmap_ports.txt"
+
+        NMAP_PORT_LIST=$(cat "$PORTS_DIR/nmap_ports.txt")
+
+        if [[ -n "$NMAP_PORT_LIST" ]]; then
+
+            safe_run nmap \
+            "Nmap Service Detection" \
+            nmap \
+            -sV \
+            -Pn \
+            -iL "$PORTS_DIR/nmap_hosts.txt" \
+            -p "$NMAP_PORT_LIST" \
+            -oN "$PORTS_DIR/nmap_services.txt" \
+            -oX "$PORTS_DIR/nmap_services.xml"
+
+        else
+
+            warn "Could not build an nmap port list from naabu output"
+
+        fi
     fi
 
 else
