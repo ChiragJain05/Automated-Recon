@@ -434,26 +434,179 @@ if safe_file_exists "$CRAWL_DIR/all_urls.txt"; then
 fi
 
 success "Collected $TOTAL_URLS URLs"
-
 # =========================
-# JS EXTRACTION
+# JS EXTRACTION + ANALYSIS
 # =========================
 
 if safe_file_exists "$CRAWL_DIR/all_urls.txt"; then
 
     info "Extracting JavaScript files"
 
-    grep "\.js$" "$CRAWL_DIR/all_urls.txt" \
+    grep -Ei '\.js(\?|$)' "$CRAWL_DIR/all_urls.txt" \
     | sort -u \
     > "$JS_DIR/js_files.txt" || true
 
     if safe_file_exists "$JS_DIR/js_files.txt"; then
+
         success "JS extraction completed"
+
+        JS_COUNT=$(wc -l < "$JS_DIR/js_files.txt")
+
+        info "Found $JS_COUNT JavaScript files"
+
     else
+
         warn "No JavaScript files extracted"
+
     fi
 
 fi
+
+# =========================
+# DOWNLOAD JS FILES
+# =========================
+
+if safe_file_exists "$JS_DIR/js_files.txt"; then
+
+    info "Downloading JavaScript files"
+
+    COUNTER=0
+
+    while read -r JS_URL; do
+
+        [[ -z "$JS_URL" ]] && continue
+
+        FILENAME=$(printf "%05d.js" "$COUNTER")
+
+        curl -Lsk \
+        --max-time 20 \
+        "$JS_URL" \
+        -o "$JS_DOWNLOAD_DIR/$FILENAME" \
+        2>/dev/null || true
+
+        ((COUNTER++))
+
+    done < "$JS_DIR/js_files.txt"
+
+    success "JavaScript download completed"
+
+fi
+
+# =========================
+# ENDPOINT EXTRACTION
+# =========================
+
+if [[ -d "$JS_DOWNLOAD_DIR" ]]; then
+
+    info "Extracting endpoints from JS"
+
+    grep -RhoE \
+    '(https?:\/\/[^"'"'"' ]+|\/[A-Za-z0-9_\/\-\?\=\&\.]+)' \
+    "$JS_DOWNLOAD_DIR" \
+    2>/dev/null \
+    | sort -u \
+    > "$JS_DIR/endpoints.txt" || true
+
+    success "Endpoint extraction completed"
+
+fi
+
+# =========================
+# GRAPHQL DETECTION
+# =========================
+
+if [[ -d "$JS_DOWNLOAD_DIR" ]]; then
+
+    grep -RHiE \
+    'graphql|apollo|gql' \
+    "$JS_DOWNLOAD_DIR" \
+    > "$JS_DIR/graphql.txt" \
+    2>/dev/null || true
+
+fi
+
+# =========================
+# FIREBASE DETECTION
+# =========================
+
+if [[ -d "$JS_DOWNLOAD_DIR" ]]; then
+
+    grep -RHoE \
+    '[A-Za-z0-9_-]+\.firebaseio\.com' \
+    "$JS_DOWNLOAD_DIR" \
+    | sort -u \
+    > "$JS_DIR/firebase.txt" || true
+
+fi
+
+# =========================
+# AWS KEY DETECTION
+# =========================
+
+if [[ -d "$JS_DOWNLOAD_DIR" ]]; then
+
+    grep -RHoE \
+    'AKIA[0-9A-Z]{16}' \
+    "$JS_DOWNLOAD_DIR" \
+    | sort -u \
+    > "$JS_DIR/aws_keys.txt" || true
+
+fi
+
+# =========================
+# TRUFFLEHOG
+# =========================
+
+if tool_exists trufflehog && [[ -d "$JS_DOWNLOAD_DIR" ]]; then
+
+    info "Running TruffleHog"
+
+    trufflehog filesystem \
+    "$JS_DOWNLOAD_DIR" \
+    --no-update \
+    > "$JS_SECRET_DIR/trufflehog.txt" \
+    2>/dev/null || true
+
+    success "TruffleHog completed"
+
+else
+
+    mark_missing "trufflehog" "JS Secret Scanning"
+
+fi
+
+# =========================
+# SECRETFINDER
+# =========================
+
+if tool_exists python3 && tool_exists SecretFinder; then
+
+    info "Running SecretFinder"
+
+    while read -r JS_URL; do
+
+        SecretFinder \
+        -i "$JS_URL" \
+        -o cli
+
+    done < "$JS_DIR/js_files.txt" \
+    > "$JS_SECRET_DIR/secretfinder.txt" \
+    2>/dev/null || true
+
+    success "SecretFinder completed"
+
+fi
+
+# =========================
+# MERGE SECRETS
+# =========================
+
+cat \
+"$JS_SECRET_DIR"/*.txt \
+2>/dev/null \
+| sort -u \
+> "$JS_SECRET_DIR/merged_secrets.txt" || true
+
 
 # =========================
 # PARAM EXTRACTION
