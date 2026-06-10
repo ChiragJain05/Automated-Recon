@@ -1,0 +1,19 @@
+# Output data — never commit recon results
+recon/
+
+# Secrets
+config.local.conf
+.env
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

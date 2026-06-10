@@ -1,261 +1,98 @@
-﻿# Automated-Recon
+# Recon Framework
 
-Fault-tolerant recon automation for authorized web security testing. The script chains common recon tools to enumerate subdomains, resolve live hosts, scan ports, probe HTTP services, crawl URLs, collect JavaScript and parameterized URLs, take screenshots, and run vulnerability checks.
+A modular, professional-grade reconnaissance pipeline for bug bounty and penetration testing.
 
-> Use this only on assets you own or have explicit permission to test.
-
-## What the Script Runs
-
-| Stage | Tool | Output |
-| --- | --- | --- |
-| Passive subdomain enumeration | `subfinder`, `amass`, `assetfinder`, `findomain` | `enum/*.txt`, `enum/all_subdomains.txt` |
-| DNS resolution | `dnsx` | `dns/resolved.txt` |
-| Port scanning | `naabu` | `ports/ports.txt` |
-| HTTP probing | `httpx` | `http/httpx.json`, `http/alive.txt` |
-| Screenshots | `gowitness` | `screenshots/` |
-| Crawling | `katana` | `crawl/katana.txt` |
-| Historical URL collection | `gau` | `crawl/gau.txt`, `crawl/all_urls.txt` |
-| JavaScript extraction | built-in `grep` | `js/js_files.txt` |
-| Parameter extraction | built-in `grep` | `params/params.txt` |
-| Content discovery | `ffuf` | `content/*.txt` |
-| Vulnerability scanning | `nuclei`, `gf`, `dalfox`, `subzy` | `vuln/*` |
-
-## Requirements
-
-- Linux or WSL/Kali is recommended.
-- Bash shell.
-- Go installed and available in `PATH`.
-- `jq` for parsing `httpx` JSON output. The script has a fallback parser, but `jq` is recommended.
-- `libpcap-dev` for `naabu`.
-- SecLists wordlist at `/usr/share/seclists/Discovery/Web-Content/common.txt`.
-
-## Install Tools in Order
-
-These commands are written for Kali/Ubuntu/Debian-based systems.
-
-### 1. System Packages
+## Quick Start
 
 ```bash
-sudo apt update
-sudo apt install -y git curl wget unzip build-essential jq libpcap-dev seclists
+# Install dependencies
+./install.sh
+
+# Run against a single domain (interactive menu)
+./recon.sh -d example.com
+
+# Run from a scope file
+./recon.sh -s scope.txt
+
+# Resume an interrupted run
+./recon.sh -d example.com -r
+
+# Skip menu, run defaults from config.conf
+./recon.sh -d example.com --no-menu
+
+# Passive only (no active scanning)
+./recon.sh -d example.com -p
 ```
 
-Install Go if it is not already installed:
+## Architecture
 
-```bash
-sudo apt install -y golang
+```
+recon-framework/
+├── recon.sh          # Main orchestrator
+├── config.conf       # All settings + API keys
+├── scope.txt         # Multi-target input
+├── install.sh        # Dependency installer
+├── modules/          # 12 independent recon stages
+├── utils/            # helpers, menu, notify, dedupe, report
+├── wordlists/        # Custom wordlist storage
+└── recon/            # Output per target (gitignored)
 ```
 
-If your distro ships an old Go version and a tool refuses to build, install the latest Go from https://go.dev/doc/install.
+## Modules
 
-### 2. Add Go Binaries to PATH
+| # | Module | Tools |
+|---|--------|-------|
+| 01 | Subdomain Enumeration | subfinder, amass, assetfinder, crt.sh |
+| 02 | DNS Resolution | dnsx, zone transfers |
+| 03 | Port Scanning | naabu, nmap |
+| 04 | HTTP Probing | httpx, gowitness, wafw00f |
+| 05 | Crawling | katana, gau |
+| 06 | JS Analysis | trufflehog, custom extraction |
+| 07 | Parameter Discovery | arjun, paramspider |
+| 08 | Content Discovery | ffuf, kiterunner |
+| 09 | Vulnerability Scan | nuclei, gf, dalfox |
+| 10 | Cloud Assets | s3scanner, cloud_enum |
+| 11 | OSINT | theHarvester, h8mail |
+| 12 | Subdomain Takeover | subzy, nuclei |
 
-```bash
-echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
-source ~/.bashrc
+## Configuration
+
+Edit `config.conf` to set:
+- API keys (Shodan, SecurityTrails, Chaos, etc.)
+- Wordlist paths
+- Performance: threads, rate limits, timeouts
+- Module toggles
+- Notification webhooks (Slack/Discord)
+
+## Output
+
+All results are written to `recon/<domain>/`:
+
+```
+recon/example.com/
+├── enum/         # Subdomain lists
+├── dns/          # Resolved hosts, DNS records
+├── ports/        # Naabu + nmap output
+├── http/         # httpx JSON, alive hosts, tech stack
+├── crawl/        # All URLs
+├── js/           # JS files, endpoints, secrets
+├── params/       # Parameterized URLs
+├── content/      # ffuf, kiterunner results
+├── vuln/         # Nuclei, gf, dalfox findings
+├── cloud/        # Bucket findings
+├── osint/        # Emails, breaches
+├── screenshots/  # gowitness captures
+├── logs/         # Run logs
+└── report.html   # Auto-generated report
 ```
 
-Verify:
+## Adding a Module
 
-```bash
-go version
-```
+1. Create `modules/13_yourmodule.sh`
+2. Implement `run_module()` — return 0=success, 1=skipped, 2=failed
+3. Use `safe_run`, `stage`, `info`, `success`, `warn` from helpers
+4. Add your module's tools to `utils/validate.sh`
 
-### 3. Core Enumeration Tools
+## Legal
 
-```bash
-go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-go install -v github.com/owasp-amass/amass/v4/...@master
-go install -v github.com/tomnomnom/assetfinder@latest
-```
-
-Install `findomain` from its release page:
-
-```bash
-wget -q https://github.com/Findomain/Findomain/releases/latest/download/findomain-linux.zip
-unzip findomain-linux.zip
-chmod +x findomain
-sudo mv findomain /usr/local/bin/
-rm -f findomain-linux.zip
-```
-
-### 4. DNS, HTTP, and Port Scanning
-
-```bash
-go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
-go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
-go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
-```
-
-### 5. Crawling and URL Collection
-
-```bash
-go install github.com/projectdiscovery/katana/cmd/katana@latest
-go install github.com/lc/gau/v2/cmd/gau@latest
-```
-
-### 6. Screenshots and Content Discovery
-
-```bash
-go install github.com/sensepost/gowitness@latest
-go install github.com/ffuf/ffuf/v2@latest
-```
-
-### 7. Vulnerability and Pattern Tools
-
-```bash
-go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-go install github.com/tomnomnom/gf@latest
-go install github.com/hahwul/dalfox/v2@latest
-go install -v github.com/PentestPad/subzy@latest
-```
-
-Install common `gf` patterns:
-
-```bash
-mkdir -p ~/.gf
-git clone https://github.com/1ndianl33t/Gf-Patterns /tmp/Gf-Patterns
-cp /tmp/Gf-Patterns/*.json ~/.gf/
-rm -rf /tmp/Gf-Patterns
-```
-
-Update Nuclei templates:
-
-```bash
-nuclei -update-templates
-```
-
-### 8. Verify Everything
-
-```bash
-for tool in subfinder amass assetfinder findomain dnsx naabu httpx gowitness katana gau ffuf nuclei gf dalfox subzy jq; do
-  command -v "$tool" >/dev/null && echo "[OK] $tool" || echo "[MISSING] $tool"
-done
-```
-
-## Usage
-
-Make the script executable:
-
-```bash
-chmod +x recon.sh
-```
-
-Run recon against a domain:
-
-```bash
-./recon.sh example.com
-```
-
-You can also pass a URL; the script normalizes it to the domain:
-
-```bash
-./recon.sh https://example.com/path
-```
-
-## Output Structure
-
-Each run writes results under:
-
-```text
-recon/<domain>/
-```
-
-Important files:
-
-```text
-enum/all_subdomains.txt  Combined subdomain list
-dns/resolved.txt         DNS-resolved hosts
-ports/ports.txt          Open ports found by naabu
-http/httpx.json          Raw httpx JSON output
-http/alive.txt           Live HTTP/HTTPS URLs
-crawl/all_urls.txt       Combined crawled and historical URLs
-params/params.txt        URLs containing parameters
-js/js_files.txt          JavaScript URLs
-vuln/                    Nuclei, gf, dalfox, and subzy results
-logs/                    Full run logs
-```
-
-## Troubleshooting
-
-### `ports.txt` is empty
-
-- Confirm `dns/resolved.txt` is not empty.
-- Try a single host manually:
-
-```bash
-naabu -host example.com -top-ports 100 -scan-type c -v
-```
-
-- Some networks block or rate-limit scanning. Try a lower rate by editing `RATE=50` in `recon.sh`.
-- Top 100 ports may miss services. Test with:
-
-```bash
-naabu -l recon/example.com/dns/resolved.txt -p - -scan-type c
-```
-
-### `alive.txt` is empty
-
-- Confirm `dns/resolved.txt` is not empty.
-- Check whether `httpx` produced JSON:
-
-```bash
-head -n 5 recon/example.com/http/httpx.json
-```
-
-- Test manually:
-
-```bash
-httpx -l recon/example.com/dns/resolved.txt -status-code -title -follow-redirects
-```
-
-- Make sure you installed ProjectDiscovery `httpx`, not the Python package with the same name:
-
-```bash
-httpx -version
-which httpx
-```
-
-### `ffuf` says the wordlist is missing
-
-Install SecLists:
-
-```bash
-sudo apt install -y seclists
-```
-
-Or edit this variable in `recon.sh`:
-
-```bash
-WORDLIST="/usr/share/seclists/Discovery/Web-Content/common.txt"
-```
-
-### Tools are installed but still show missing
-
-Your Go bin directory is probably not in `PATH`.
-
-```bash
-export PATH="$PATH:$HOME/go/bin"
-```
-
-Then reopen the terminal or run:
-
-```bash
-source ~/.bashrc
-```
-
-## References
-
-- ProjectDiscovery CLI quick start: https://docs.projectdiscovery.io/quickstart/index
-- Subfinder: https://github.com/projectdiscovery/subfinder
-- dnsx: https://docs.projectdiscovery.io/tools/dnsx/install
-- httpx: https://docs.projectdiscovery.io/tools/httpx/install
-- naabu: https://github.com/projectdiscovery/naabu
-- katana: https://docs.projectdiscovery.io/opensource/katana/install
-- nuclei: https://github.com/projectdiscovery/nuclei
-- OWASP Amass: https://github.com/owasp-amass/amass
-- ffuf: https://github.com/ffuf/ffuf
-- gau: https://github.com/lc/gau
-- gowitness: https://github.com/sensepost/gowitness
-- Dalfox: https://dalfox.hahwul.com/page/installation/
-- subzy: https://github.com/PentestPad/subzy
+Use only against targets you have explicit permission to test.
